@@ -29,6 +29,16 @@ public class PlayerController : MonoBehaviour
     [SerializeField] private Animator animator;
     [SerializeField] private SpriteRenderer spriteRenderer;
 
+    [Header("Зворотний звʼязок")]
+    [SerializeField, Range(1f, 30f)] private float hardLandingSpeed = 9f;
+    [SerializeField] private HitStop hitStop;
+
+    [Header("Звук")]
+    [SerializeField] private AudioSource source;
+    [SerializeField] private AudioClip[] footsteps;   // щонайменше ТРИ кліпи
+    [SerializeField, Range(0f, 0.3f)] private float pitchVariance = 0.12f;
+    [SerializeField, Range(0.1f, 0.8f)] private float stepInterval = 0.32f;
+
     private static readonly int SpeedHash = Animator.StringToHash("Speed");
 
     private Rigidbody2D body;
@@ -37,6 +47,9 @@ public class PlayerController : MonoBehaviour
     private bool isGrounded;
     private float coyoteCounter;
     private float jumpBufferCounter;
+    private bool wasGrounded;
+    private float fallSpeed;
+    private float stepTimer;
 
     private float JumpVelocity =>
         Mathf.Sqrt(2f * Mathf.Abs(Physics2D.gravity.y) * baseGravity * jumpHeight);
@@ -46,10 +59,12 @@ public class PlayerController : MonoBehaviour
         body = GetComponent<Rigidbody2D>();
         controls = new PlayerControls();
 
-        // Якщо поля порожні — знайдемо на цьому ж об'єкті
         if (animator == null) animator = GetComponent<Animator>();
         if (spriteRenderer == null) spriteRenderer = GetComponent<SpriteRenderer>();
-        if (animator == null) Debug.LogWarning("PlayerController: Animator не знайдено на Player!");
+        if (source == null) source = GetComponent<AudioSource>();
+
+        // Префаб не може зберігати посилання на обʼєкт сцени — шукаємо самі
+        if (hitStop == null) hitStop = FindAnyObjectByType<HitStop>();
     }
 
     private void OnEnable()  => controls.Player.Enable();
@@ -59,6 +74,8 @@ public class PlayerController : MonoBehaviour
     private void Update()
     {
         isGrounded = CheckGround();
+        CheckLanding();
+        UpdateFootsteps();
 
         bool canRefill = isGrounded && body.linearVelocity.y <= 0.01f;
         coyoteCounter = canRefill ? coyoteTime : coyoteCounter - Time.deltaTime;
@@ -102,9 +119,56 @@ public class PlayerController : MonoBehaviour
         body.linearVelocity = new Vector2(body.linearVelocity.x, JumpVelocity);
     }
 
+    private void CheckLanding()
+    {
+        // Поки летимо вниз — памʼятаємо, наскільки швидко
+        if (!isGrounded)
+            fallSpeed = Mathf.Max(fallSpeed, -body.linearVelocity.y);
+
+        if (isGrounded && !wasGrounded)   // саме ПЕРЕХІД, а не стан
+            OnLanded(fallSpeed);
+
+        if (isGrounded) fallSpeed = 0f;
+        wasGrounded = isGrounded;
+    }
+
+    private void OnLanded(float speed)
+    {
+        // ТІЛЬКИ жорстке приземлення. Легкий зскок зі сходинки ефекту не дає
+        if (speed < hardLandingSpeed) return;
+
+        if (hitStop != null) hitStop.Stop(0.08f);
+    }
+
+    private void UpdateFootsteps()
+    {
+        bool running = isGrounded && Mathf.Abs(body.linearVelocity.x) > 0.5f;
+
+        // Не біжимо — скидаємо таймер, щоб перший крок після старту був одразу
+        if (!running) { stepTimer = 0f; return; }
+
+        stepTimer -= Time.deltaTime;
+        if (stepTimer <= 0f)
+        {
+            PlayFootstep();
+            stepTimer = stepInterval;
+        }
+    }
+
+    private void PlayFootstep()
+    {
+        if (source == null || footsteps.Length == 0) return;
+
+        // 1) різні кліпи — прибирає впізнаваність конкретного звуку
+        AudioClip clip = footsteps[Random.Range(0, footsteps.Length)];
+
+        // 2) розкид висоти тону — прибирає механічність повторення
+        source.pitch = 1f + Random.Range(-pitchVariance, pitchVariance);
+        source.PlayOneShot(clip);
+    }
+
     private void UpdateVisuals()
     {
-        // Джерело істини — фактична швидкість тіла, а не натиснута клавіша
         if (animator != null)
             animator.SetFloat(SpeedHash, Mathf.Abs(body.linearVelocity.x));
 
